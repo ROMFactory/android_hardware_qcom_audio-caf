@@ -149,7 +149,7 @@ uint32_t AudioPolicyManager::checkDeviceMuteStrategies(AudioOutputDescriptor *ou
                 setStrategyMute((routing_strategy)i, mute, curOutput, mute ? 0 : delayMs);
                 if (desc->isStrategyActive((routing_strategy)i)) {
                     // do tempMute only for current output
-                    if (tempMute) {
+                    if (tempMute && !mute) {
                         if ((desc != outputDesc) && (desc->device() == device)) {
                             ALOGD("avoid tempmute on curOutput %d as device is same", curOutput);
                         } else {
@@ -213,10 +213,6 @@ void AudioPolicyManager::setStreamMute(int stream,
           stream, on, output, outputDesc->mMuteCount[stream], device);
 
     if (on) {
-        if (outputDesc->mMuteCount[stream] > 0) {
-            ALOGV("setStreamMute() muting already muted stream!");
-            return;
-        }
         if (outputDesc->mMuteCount[stream] == 0) {
             if (streamDesc.mCanBeMuted &&
                     ((stream != AudioSystem::ENFORCED_AUDIBLE) ||
@@ -1646,16 +1642,16 @@ audio_devices_t AudioPolicyManager::getDeviceForStrategy(routing_strategy strate
                 device = mAvailableOutputDevices & AUDIO_DEVICE_OUT_BLUETOOTH_A2DP_SPEAKER;
                 if (device) break;
             }
-            if (mPhoneState != AudioSystem::MODE_IN_CALL) {
+            if (mPhoneState != AudioSystem::MODE_IN_CALL && mPhoneState != AudioSystem::MODE_IN_COMMUNICATION) {
                 device = mAvailableOutputDevices & AUDIO_DEVICE_OUT_USB_ACCESSORY;
                 if (device) break;
                 device = mAvailableOutputDevices & AUDIO_DEVICE_OUT_USB_DEVICE;
                 if (device) break;
                 device = mAvailableOutputDevices & AUDIO_DEVICE_OUT_DGTL_DOCK_HEADSET;
                 if (device) break;
+                device = mAvailableOutputDevices & AUDIO_DEVICE_OUT_ANLG_DOCK_HEADSET;
+                if (device) break;
             }
-            device = mAvailableOutputDevices & AUDIO_DEVICE_OUT_ANLG_DOCK_HEADSET;
-            if (device) break;
             device = mAvailableOutputDevices & AUDIO_DEVICE_OUT_SPEAKER;
             if (device) break;
             device = mDefaultOutputDevice;
@@ -2084,8 +2080,7 @@ status_t AudioPolicyManager::checkAndSetVolume(int stream,
             }
         }
 
-        if (voiceVolume != mLastALSAvoiceVolume && (output == mPrimaryOutput ||
-            isDirectOutput(output))) {
+        if (voiceVolume != mLastVoiceVolume && (output == mPrimaryOutput || isDirectOutput(output))) {
             mpClientInterface->setVoiceVolume(voiceVolume, delayMs);
             //Cache the voiceVolume only when in Call
             if (isInCall())
@@ -2235,6 +2230,32 @@ bool AudioPolicyManager::isCompatibleProfile(AudioPolicyManagerBase::IOProfile *
             format %x, channelMask %d",
             device, flags, samplingRate, format, channelMask);
     return true;
+}
+
+float AudioPolicyManager::computeVolume(int stream,
+                                            int index,
+                                            audio_io_handle_t output,
+                                            audio_devices_t device)
+{
+    float volume = 1.0;
+    AudioOutputDescriptor *outputDesc = mOutputs.valueFor(output);
+    StreamDescriptor &streamDesc = mStreams[stream];
+
+    if (device == AUDIO_DEVICE_NONE) {
+        device = outputDesc->device();
+    }
+
+    // if volume is not 0 (not muted), force media volume to max on digital output
+    if (stream == AudioSystem::MUSIC &&
+        index != mStreams[stream].mIndexMin &&
+        (device == AUDIO_DEVICE_OUT_AUX_DIGITAL ||
+         device == AUDIO_DEVICE_OUT_DGTL_DOCK_HEADSET ||
+         device == AUDIO_DEVICE_OUT_USB_ACCESSORY ||
+         device == AUDIO_DEVICE_OUT_USB_DEVICE ||
+         device == AUDIO_DEVICE_OUT_PROXY)) {
+        return 1.0;
+    }
+    return AudioPolicyManagerBase::computeVolume(stream, index, output, device);
 }
 
 bool AudioPolicyManager::platform_is_Fusion3()

@@ -270,9 +270,11 @@ ssize_t AudioStreamOutALSA::write(const void *buffer, size_t bytes)
                 mHandle->handle = NULL;
                 if((!strncmp(mHandle->useCase, SND_USE_CASE_VERB_IP_VOICECALL, strlen(SND_USE_CASE_VERB_IP_VOICECALL))) ||
                   (!strncmp(mHandle->useCase, SND_USE_CASE_MOD_PLAY_VOIP, strlen(SND_USE_CASE_MOD_PLAY_VOIP)))) {
-                     pcm_close(mHandle->rxHandle);
-                     mHandle->rxHandle = NULL;
-                     mHandle->module->startVoipCall(mHandle);
+                     if (mHandle->rxHandle) {
+                         pcm_close(mHandle->rxHandle);
+                         mHandle->rxHandle = NULL;
+                         mHandle->module->startVoipCall(mHandle);
+                     }
                 }
                 else
                 {
@@ -412,7 +414,17 @@ status_t AudioStreamOutALSA::standby()
 uint32_t AudioStreamOutALSA::latency() const
 {
     // Android wants latency in milliseconds.
-    return USEC_TO_MSEC (mHandle->latency);
+    uint32_t latency = mHandle->latency;
+    if ( ((mParent->mCurRxDevice & AudioSystem::DEVICE_OUT_ALL_A2DP) &&
+         (mParent->mExtOutStream == mParent->mA2dpStream)) &&
+         (mParent->mA2dpStream != NULL) ) {
+        uint32_t bt_latency = mParent->mExtOutStream->get_latency(mParent->mExtOutStream);
+        uint32_t proxy_latency = mParent->mALSADevice->avail_in_ms;
+        latency += bt_latency*1000 + proxy_latency*1000;
+        ALOGV("latency = %d, bt_latency = %d, proxy_latency = %d", latency, bt_latency, proxy_latency);
+    }
+
+    return USEC_TO_MSEC (latency);
 }
 
 // return the number of audio frames written by the audio dsp to DAC since
