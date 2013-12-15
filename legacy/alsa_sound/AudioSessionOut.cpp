@@ -26,8 +26,9 @@
 #include <dlfcn.h>
 #include <math.h>
 
-#define LOG_TAG "AudioSessionOutALSA"
+#define LOG_TAG "AudioSessionOut"
 //#define LOG_NDEBUG 0
+//#define LOG_NDDEBUG 0
 #include <utils/Log.h>
 #include <utils/String8.h>
 
@@ -189,18 +190,22 @@ status_t AudioSessionOutALSA::setVolume(float left, float right)
     mStreamVol = (lrint((left * 0x2000)+0.5)) << 16 | (lrint((right * 0x2000)+0.5));
 
     ALOGV("Setting stream volume to %d (available range is 0 to 0x2000)\n", mStreamVol);
-    if(mAlsaHandle) {
-        if(!strcmp(mAlsaHandle->useCase, SND_USE_CASE_VERB_HIFI_LOW_POWER) ||
-           !strcmp(mAlsaHandle->useCase, SND_USE_CASE_MOD_PLAY_LPA)) {
-            ALOGD("setLpaVolume(%u)\n", mStreamVol);
-            ALOGD("Setting LPA volume to %d (available range is 0 to 100)\n", mStreamVol);
+    if(mAlsaHandle && mAlsaHandle->handle) {
+        if(!strncmp(mAlsaHandle->useCase, SND_USE_CASE_VERB_HIFI_LOW_POWER,
+           sizeof(SND_USE_CASE_VERB_HIFI_LOW_POWER)) ||
+           !strncmp(mAlsaHandle->useCase, SND_USE_CASE_MOD_PLAY_LPA,
+           sizeof(SND_USE_CASE_MOD_PLAY_LPA))) {
+            ALOGV("setLpaVolume(%u)\n", mStreamVol);
+            ALOGV("Setting LPA volume to %d (available range is 0 to 100)\n", mStreamVol);
             mAlsaHandle->module->setLpaVolume(mStreamVol);
             return status;
         }
-        else if(!strcmp(mAlsaHandle->useCase, SND_USE_CASE_VERB_HIFI_TUNNEL) ||
-                !strcmp(mAlsaHandle->useCase, SND_USE_CASE_MOD_PLAY_TUNNEL)) {
-            ALOGD("setCompressedVolume(%u)\n", mStreamVol);
-            ALOGD("Setting Compressed volume to %d (available range is 0 to 100)\n", mStreamVol);
+        else if(!strncmp(mAlsaHandle->useCase, SND_USE_CASE_VERB_HIFI_TUNNEL,
+                sizeof(SND_USE_CASE_VERB_HIFI_TUNNEL)) ||
+                !strncmp(mAlsaHandle->useCase, SND_USE_CASE_MOD_PLAY_TUNNEL,
+                sizeof(SND_USE_CASE_MOD_PLAY_TUNNEL))) {
+            ALOGV("setCompressedVolume(%u)\n", mStreamVol);
+            ALOGV("Setting Compressed volume to %d (available range is 0 to 100)\n", mStreamVol);
             mAlsaHandle->module->setCompressedVolume(mStreamVol);
             return status;
         }
@@ -751,7 +756,16 @@ status_t AudioSessionOutALSA::standby()
 uint32_t AudioSessionOutALSA::latency() const
 {
     // Android wants latency in milliseconds.
-    return USEC_TO_MSEC (mAlsaHandle->latency);
+    uint32_t latency = mAlsaHandle->latency;
+    if ( ((mParent->mCurRxDevice & AudioSystem::DEVICE_OUT_ALL_A2DP) &&
+         (mParent->mExtOutStream == mParent->mA2dpStream)) &&
+         (mParent->mA2dpStream != NULL) ) {
+        uint32_t bt_latency = mParent->mExtOutStream->get_latency(mParent->mExtOutStream);
+        uint32_t proxy_latency = mParent->mALSADevice->avail_in_ms;
+        latency += bt_latency*1000 + proxy_latency*1000;
+        ALOGV("latency = %d, bt_latency = %d, proxy_latency = %d", latency, bt_latency, proxy_latency);
+    }
+    return USEC_TO_MSEC (latency);
 }
 
 status_t AudioSessionOutALSA::setObserver(void *observer)
@@ -868,7 +882,13 @@ status_t AudioSessionOutALSA::openDevice(char *useCase, bool bIsUseCase, int dev
     alsa_handle.rxHandle    = 0;
     alsa_handle.ucMgr       = mUcMgr;
     alsa_handle.session     = this;
-    strlcpy(alsa_handle.useCase, useCase, sizeof(alsa_handle.useCase));
+    if (useCase) {
+        ALOGV("openDevice: usecase %s bIsUseCase:%d devices:%x", useCase, bIsUseCase, devices);
+        strlcpy(alsa_handle.useCase, useCase, sizeof(alsa_handle.useCase));
+    } else {
+        ALOGE("openDevice invalid useCase, return BAD_VALUE:%x",BAD_VALUE);
+        return BAD_VALUE;
+    }
 
     mAlsaDevice->route(&alsa_handle, devices, mParent->mode());
     if (bIsUseCase) {
@@ -930,7 +950,8 @@ status_t AudioSessionOutALSA::setParameters(const String8& keyValuePairs)
                 mParent->mRouteAudioToExtOut = true;
                 ALOGD("setParameters(): device %#x", device);
             }
-            mParent->doRouting(device);
+            char * usecase = (mAlsaHandle != NULL )? mAlsaHandle->useCase: NULL;
+            mParent->doRouting(device,usecase);
         }
         param.remove(key);
     }
